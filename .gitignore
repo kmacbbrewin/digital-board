@@ -1,0 +1,14 @@
+.venv/
+.idea/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+messages.json
+todos.json
+credentials.json
+token.json
+quote_cache.json
+*.DS_Store

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Digital Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Mono:wght@300;400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="board-header">
+    <div class="header-left">
+      <span class="dot pulse"></span>
+      <span class="label">LIVE</span>
+    </div>
+    <div class="header-center">
+      <span class="board-title">Digital Board</span>
+    </div>
+    <div class="header-right">
+      {% if gcal_connected %}
+        <span class="gcal-status connected" title="Google Calendar connected">&#x25cf; Calendar</span>
+      {% else %}
+        <a href="/auth/google" class="gcal-status connect">+ Google Calendar</a>
+      {% endif %}
+      <span class="clock" id="clock"></span>
+    </div>
+  </header>
+
+  <!-- ── Weather banner ── -->
+  <div class="weather-banner" id="weather-widget" style="display:none">
+    <div class="weather-icon" id="weather-icon"></div>
+    <div class="weather-center">
+      <div class="weather-temp-row">
+        <span class="weather-temp" id="weather-temp"></span>
+        <span class="weather-feels" id="weather-feels"></span>
+      </div>
+      <p class="weather-quip" id="weather-quip"></p>
+    </div>
+    <div class="weather-right">
+      <p class="weather-condition" id="weather-condition"></p>
+      <div class="weather-meta" id="weather-meta"></div>
+    </div>
+  </div>
+
+  <!-- ── Main layout ── -->
+  <main class="board-main">
+
+    <!-- ── Today spotlight ── -->
+    <section class="spotlight" id="spotlight">
+      <div class="spotlight-clock" id="spotlight-clock"></div>
+
+      <div class="spotlight-date">
+        <span class="s-weekday" id="s-weekday">{{ today.strftime('%A') }}</span>
+        <span class="s-day"    id="s-day">{{ today.day }}</span>
+        <span class="s-month"  id="s-month">{{ today.strftime('%B %Y') }}</span>
+      </div>
+
+      <div class="spotlight-msg" id="spotlight-msg">
+        {% if today_msg %}
+          <h2 class="msg-title">{{ today_msg.title }}</h2>
+          <p  class="msg-body">{{ today_msg.content }}</p>
+        {% else %}
+          <h2 class="msg-title empty-hint">No message for today</h2>
+          <p  class="msg-body empty-sub">Click any date on the calendar to add a message.</p>
+        {% endif %}
+      </div>
+
+      <div id="quote-block" style="display:none">
+        <blockquote class="quote-text"></blockquote>
+        <cite class="quote-author"></cite>
+      </div>
+
+      <button class="btn-edit" id="btn-edit-today" title="Edit today's message">✎</button>
+    </section>
+
+    <!-- ── Calendar ── -->
+    <section class="calendar-panel" id="calendar-panel">
+      <div class="cal-nav">
+        <button class="nav-btn" id="prev-month">&#8592;</button>
+        <span class="cal-title" id="cal-title">{{ cal.month_name }} {{ cal.year }}</span>
+        <button class="nav-btn" id="next-month">&#8594;</button>
+      </div>
+
+      <div class="cal-grid-wrapper">
+        <div class="cal-weekdays">
+          {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+            <span>{{ d }}</span>
+          {% endfor %}
+        </div>
+
+        <div class="cal-grid" id="cal-grid">
+          {% for week in cal.weeks %}
+            {% for day in week %}
+              {% if day == 0 %}
+                <div class="cal-cell empty"></div>
+              {% else %}
+                {% set key = "%04d-%02d-%02d"|format(cal.year, cal.month, day) %}
+                <div class="cal-cell{% if day == today.day and cal.month == today.month and cal.year == today.year %} today{% endif %}{% if key in messages %} has-msg{% endif %}"
+                     data-year="{{ cal.year }}"
+                     data-month="{{ cal.month }}"
+                     data-day="{{ day }}">
+                  <span class="day-num">{{ day }}</span>
+                  {% if key in messages %}
+                    <span class="day-dot"></span>
+                  {% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Todo list ── -->
+    <section class="todo-panel" id="todo-panel">
+      <div class="todo-header">
+        <span class="todo-title">To-do</span>
+        <span class="todo-count" id="todo-count"></span>
+      </div>
+      <ul class="todo-list" id="todo-list"></ul>
+      <form class="todo-form" id="todo-form">
+        <div class="todo-form-row">
+          <input class="todo-input" id="todo-input" type="text" placeholder="Add a task…" maxlength="200" autocomplete="off" />
+          <button class="todo-add-btn" type="submit">+</button>
+        </div>
+        <input class="todo-assignee-input" id="todo-assignee-input" type="text" placeholder="Assign to… (optional)" maxlength="60" autocomplete="off" />
+      </form>
+    </section>
+
+  </main>
+
+  <!-- ── Modal ── -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <span class="modal-date-label" id="modal-date-label"></span>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <input  class="field" id="field-title"   type="text"     placeholder="Message title…" maxlength="120" />
+        <textarea class="field" id="field-content" rows="4" placeholder="Body (optional)…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-danger"  id="btn-delete">Delete</button>
+        <button class="btn-primary" id="btn-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
