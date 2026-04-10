@@ -189,6 +189,197 @@ def _temp_quip(temp_f: float) -> str:
     return f"{temp_f:.0f}°F. Absolutely not. Stay inside forever."
 
 
+def _zip_to_latlon(zip_code: str) -> tuple:
+    """Convert a US zip code to (lat, lon, city, state) via zippopotam.us."""
+    resp = http.get(f"https://api.zippopotam.us/us/{zip_code}", timeout=5)
+    if resp.status_code != 200:
+        raise ValueError(f"Unknown zip code: {zip_code}")
+    data  = resp.json()
+    place = data["places"][0]
+    return (
+        float(place["latitude"]),
+        float(place["longitude"]),
+        place["place name"],
+        place["state abbreviation"],
+    )
+
+
+def _wind_direction_label(degrees: float) -> str:
+    labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
+              "S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    return labels[round(degrees / 22.5) % 16]
+
+
+def _beaufort_scale(speed_kmh: float) -> tuple:
+    thresholds = [1, 5, 11, 19, 28, 38, 49, 61, 74, 88, 102, 117]
+    labels = [
+        "Calm", "Light air", "Light breeze", "Gentle breeze",
+        "Moderate breeze", "Fresh breeze", "Strong breeze",
+        "Near gale", "Gale", "Strong gale", "Storm",
+        "Violent storm", "Hurricane force",
+    ]
+    for i, t in enumerate(thresholds):
+        if speed_kmh < t:
+            return i, labels[i]
+    return 12, labels[12]
+
+
+def _uv_category(uv: float) -> str:
+    if uv < 3:  return "Low"
+    if uv < 6:  return "Moderate"
+    if uv < 8:  return "High"
+    if uv < 11: return "Very High"
+    return "Extreme"
+
+
+def _dew_point_comfort(dp_f: float) -> str:
+    if dp_f < 50: return "Dry and comfortable"
+    if dp_f < 60: return "Comfortable"
+    if dp_f < 65: return "Slightly humid"
+    if dp_f < 70: return "Humid — starting to feel muggy"
+    if dp_f < 75: return "Very humid — oppressive"
+    return "Severely humid — dangerous"
+
+
+def _cape_category(cape: float) -> str:
+    if cape < 300:  return "Weak / stable"
+    if cape < 1000: return "Moderate instability"
+    if cape < 2500: return "Large instability"
+    return "Extreme instability — severe weather possible"
+
+
+def get_weather_by_zip(zip_code: str) -> dict:
+    """Fetch a rich set of weather metrics for a US zip code."""
+    lat, lon, city, state = _zip_to_latlon(zip_code)
+
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&current="
+        "temperature_2m,relative_humidity_2m,dew_point_2m,"
+        "apparent_temperature,wet_bulb_temperature_2m,"
+        "precipitation,rain,showers,snowfall,weather_code,"
+        "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,"
+        "pressure_msl,surface_pressure,"
+        "wind_speed_10m,wind_speed_80m,wind_direction_10m,wind_gusts_10m,"
+        "uv_index,visibility,cape,freezing_level_height,"
+        "shortwave_radiation,direct_radiation,diffuse_radiation,is_day"
+        "&temperature_unit=fahrenheit"
+        "&wind_speed_unit=kmh"
+        "&precipitation_unit=inch"
+    )
+
+    w   = http.get(url, timeout=5).json()
+    cur = w["current"]
+
+    def g(key, default=0):
+        v = cur.get(key)
+        return default if v is None else v
+
+    code        = int(g("weather_code"))
+    temp        = g("temperature_2m")
+    feels       = g("apparent_temperature")
+    wet_bulb    = g("wet_bulb_temperature_2m")
+    humidity    = g("relative_humidity_2m")
+    dew_point   = g("dew_point_2m")
+    wind_spd    = g("wind_speed_10m")
+    wind_spd_80 = g("wind_speed_80m")
+    wind_dir    = g("wind_direction_10m")
+    wind_gust   = g("wind_gusts_10m")
+    pressure    = g("pressure_msl")
+    sfc_pres    = g("surface_pressure")
+    cloud       = g("cloud_cover")
+    cloud_lo    = g("cloud_cover_low")
+    cloud_mid   = g("cloud_cover_mid")
+    cloud_hi    = g("cloud_cover_high")
+    precip      = g("precipitation")
+    rain        = g("rain")
+    showers     = g("showers")
+    snowfall    = g("snowfall")
+    uv          = g("uv_index")
+    visibility  = g("visibility")
+    cape        = g("cape")
+    freeze_lvl  = g("freezing_level_height")
+    sw_rad      = g("shortwave_radiation")
+    dir_rad     = g("direct_radiation")
+    diff_rad    = g("diffuse_radiation")
+    is_day      = bool(g("is_day", 1))
+
+    beaufort_n, beaufort_label = _beaufort_scale(wind_spd)
+    icon, condition = _WEATHER_CODES.get(code, ("🌡️", "Something meteorological is happening."))
+    quip = _temp_quip(temp)
+
+    return {
+        "location": {
+            "zip":   zip_code,
+            "city":  city,
+            "state": state,
+            "lat":   round(lat, 4),
+            "lon":   round(lon, 4),
+        },
+        "condition": {
+            "code":        code,
+            "icon":        icon,
+            "description": condition,
+            "is_day":      is_day,
+        },
+        "temperature": {
+            "current_f":   round(temp, 1),
+            "feels_like_f": round(feels, 1),
+            "wet_bulb_f":  round(wet_bulb, 1),
+            "quip":        quip,
+        },
+        "humidity": {
+            "relative_pct": humidity,
+            "dew_point_f":  round(dew_point, 1),
+            "comfort":      _dew_point_comfort(dew_point),
+        },
+        "wind": {
+            "speed_kmh":          round(wind_spd, 1),
+            "speed_mph":          round(wind_spd * 0.621371, 1),
+            "speed_80m_kmh":      round(wind_spd_80, 1),
+            "gusts_kmh":          round(wind_gust, 1),
+            "gusts_mph":          round(wind_gust * 0.621371, 1),
+            "direction_deg":      wind_dir,
+            "direction_label":    _wind_direction_label(wind_dir),
+            "beaufort_number":    beaufort_n,
+            "beaufort_description": beaufort_label,
+        },
+        "pressure": {
+            "sea_level_hpa":  round(pressure, 1),
+            "sea_level_inhg": round(pressure * 0.02953, 2),
+            "surface_hpa":    round(sfc_pres, 1),
+        },
+        "clouds": {
+            "total_pct": cloud,
+            "low_pct":   cloud_lo,
+            "mid_pct":   cloud_mid,
+            "high_pct":  cloud_hi,
+        },
+        "precipitation": {
+            "total_in":    round(precip,   3),
+            "rain_in":     round(rain,     3),
+            "showers_in":  round(showers,  3),
+            "snowfall_in": round(snowfall, 3),
+        },
+        "radiation": {
+            "shortwave_wm2": round(sw_rad,   1),
+            "direct_wm2":    round(dir_rad,  1),
+            "diffuse_wm2":   round(diff_rad, 1),
+            "uv_index":      round(uv, 1),
+            "uv_category":   _uv_category(uv),
+        },
+        "atmosphere": {
+            "visibility_m":     round(visibility),
+            "visibility_mi":    round(visibility / 1609.34, 2),
+            "cape_jkg":         round(cape),
+            "cape_category":    _cape_category(cape),
+            "freezing_level_m":  round(freeze_lvl),
+            "freezing_level_ft": round(freeze_lvl * 3.28084),
+        },
+    }
+
+
 def get_weather() -> dict:
     # Detect location from IP
     try:
@@ -380,6 +571,18 @@ def weather_route():
 
 
 # ── Quote route ──────────────────────────────────────────────────────────
+
+
+@app.route("/weather/zip/<zip_code>")
+def weather_zip_route(zip_code: str):
+    if not zip_code.isdigit() or len(zip_code) != 5:
+        return jsonify({"error": "Invalid zip code — must be exactly 5 digits"}), 400
+    try:
+        return jsonify(get_weather_by_zip(zip_code))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/quote")
